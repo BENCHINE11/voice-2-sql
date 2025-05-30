@@ -86,7 +86,7 @@ const VoiceInput: React.FC = () => {
             value={currentText}
             onChange={handleTextareaChange}
             className="input min-h-[80px] py-3 pr-12"
-            placeholder="e.g. 'Show me all customers from California who placed orders worth more than $1000 last month'"
+            placeholder="e.g. 'Show me all teachers whose names start with B'"
             rows={2}
           />
           
