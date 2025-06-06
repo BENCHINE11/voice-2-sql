@@ -1,25 +1,80 @@
-import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import mysql from 'mysql2/promise';
 import axios from 'axios';
+import dotenv from 'dotenv';
+
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+import express from 'express';
+import mysql from 'mysql2/promise';
+
+import { verifyToken } from './middleware/auth.js';
+
 
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.use(cors());
 app.use(express.json());
 
 // Connexion MySQL
 const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: '', // ou 'root' selon ton installation
-  database: 'ensat', // adapte selon ton nom de BDD
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD, // ou 'root' selon ton installation
+  database: process.env.DB_NAME, // adapte selon ton nom de BDD
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
+});
+
+// Auth & internal app DB
+const coreDb = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.AUTH_DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 5,
+  queueLimit: 0
+});
+
+// Register
+app.post('/api/register', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: 'Email and password are required.' });
+
+  try {
+    const [existing] = await coreDb.query('SELECT id FROM users WHERE email = ?', [email]);
+    if (existing.length > 0) return res.status(409).json({ message: 'User already exists.' });
+
+    const password_hash = await bcrypt.hash(password, 10);
+    await coreDb.query('INSERT INTO users (email, password_hash) VALUES (?, ?)', [email, password_hash]);
+
+    res.status(201).json({ message: 'User registered successfully.' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Registration failed.' });
+  }
+});
+
+// Login
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const [users] = await coreDb.query('SELECT * FROM users WHERE email = ?', [email]);
+    const user = users[0];
+    if (!user || !(await bcrypt.compare(password, user.password_hash)))
+      return res.status(401).json({ message: 'Invalid credentials.' });
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+    res.json({ token });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Login failed.' });
+  }
 });
 
 // API Gemini → SQL
@@ -95,7 +150,7 @@ app.post('/api/text-to-sql', async (req, res) => {
 });
 
 // API exécution SQL
-app.post('/api/execute-query', async (req, res) => {
+app.post('/api/execute-query', verifyToken, async (req, res) => {
   const { query } = req.body;
 
   if (!query) return res.status(400).json({ message: 'Query is required' });
@@ -103,7 +158,7 @@ app.post('/api/execute-query', async (req, res) => {
   if (!query.toUpperCase().includes('FROM')) {
     return res.status(400).json({ message: 'Query seems incomplete (missing FROM clause).' });
   }
-  
+
   if (!isQuerySafe(query)) {
     return res.status(403).json({ message: 'Forbidden operation detected in query.' });
   }
@@ -112,13 +167,33 @@ app.post('/api/execute-query', async (req, res) => {
     console.log('Received query for execution:', query);
     const [rows, fields] = await pool.query(query);
     const columns = fields.map(f => f.name);
-    return res.json({
-      fields: columns,
-      rows
-    });
+
+    // Save query to history
+    const userId = req.user?.userId;
+    if (userId) {
+      await coreDb.query('INSERT INTO query_history (user_id, query) VALUES (?, ?)', [userId, query]);
+    }
+
+    return res.json({ fields: columns, rows });
   } catch (error) {
     console.error('Query execution error:', error.message);
     return res.status(500).json({ message: 'SQL Execution failed', error: error.message });
+  }
+});
+
+// Query History
+app.get('/api/history', verifyToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const [rows] = await coreDb.query(
+      'SELECT id, query, created_at, is_bookmarked FROM query_history WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    );
+    res.json({ history: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch history.' });
   }
 });
 

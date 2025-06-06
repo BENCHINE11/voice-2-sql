@@ -37,14 +37,35 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [results, setResults] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [history, setHistory] = useState<QueryItem[]>(() => {
-    const savedHistory = localStorage.getItem('queryHistory');
-    return savedHistory ? JSON.parse(savedHistory) : [];
-  });
-
+  const [history, setHistory] = useState<QueryItem[]>([]);
   useEffect(() => {
-    localStorage.setItem('queryHistory', JSON.stringify(history));
-  }, [history]);
+    const fetchHistory = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        const res = await api.get('/api/history', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const formatted = res.data.history.map((h: any) => ({
+          id: h.id.toString(),
+          text: h.query,
+          sqlQuery: h.query,
+          timestamp: new Date(h.created_at).getTime(),
+          results: undefined // or null for now
+        }));
+
+        setHistory(formatted);
+      } catch (err) {
+        console.error('Failed to load history:', err);
+      }
+    };
+
+    fetchHistory();
+  }, []);
 
   const processQuery = async (text: string) => {
     if (!text.trim()) return;
@@ -61,9 +82,16 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsProcessing(false);
       
       // Then, execute the query
-      const { data: resultsData } = await api.post('/api/execute-query', { 
-        query: sqlData.query 
-      });
+      const token = localStorage.getItem('token');
+
+      const { data: resultsData } = await api.post('/api/execute-query', 
+        { query: sqlData.query },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
       
       setResults(resultsData);
       
