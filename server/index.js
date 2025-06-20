@@ -1,12 +1,20 @@
-import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
-import mysql from 'mysql2/promise';
 import axios from 'axios';
+import dotenv from 'dotenv';
+
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+import express from 'express';
+import mysql from 'mysql2/promise';
+
+import { verifyToken } from './middleware/auth.js';
+
 
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.use(cors());
 app.use(express.json());
@@ -86,6 +94,7 @@ app.post('/api/execute-query', async (req, res) => {
     return res.status(400).json({ message: 'Query seems incomplete (missing FROM clause).' });
   }
 
+
   if (!isQuerySafe(query)) {
     return res.status(403).json({ message: 'Forbidden operation detected in query.' });
   }
@@ -102,6 +111,22 @@ app.post('/api/execute-query', async (req, res) => {
   } catch (error) {
     console.error('Query execution error:', error.message);
     return res.status(500).json({ message: 'SQL Execution failed', error: error.message });
+  }
+});
+
+// Query History
+app.get('/api/history', verifyToken, async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const [rows] = await coreDb.query(
+      'SELECT id, query, created_at, is_bookmarked FROM query_history WHERE user_id = ? ORDER BY created_at DESC',
+      [userId]
+    );
+    res.json({ history: rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch history.' });
   }
 });
 

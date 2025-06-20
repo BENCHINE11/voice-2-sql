@@ -45,8 +45,33 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   });
 
   useEffect(() => {
-    localStorage.setItem('queryHistory', JSON.stringify(history));
-  }, [history]);
+    const fetchHistory = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        const res = await api.get('/api/history', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const formatted = res.data.history.map((h: any) => ({
+          id: h.id.toString(),
+          text: h.query,
+          sqlQuery: h.query,
+          timestamp: new Date(h.created_at).getTime(),
+          results: undefined // or null for now
+        }));
+
+        setHistory(formatted);
+      } catch (err) {
+        console.error('Failed to load history:', err);
+      }
+    };
+
+    fetchHistory();
+  }, []);
 
   const processQuery = async (text: string) => {
     if (!text.trim()) return;
