@@ -1,53 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Send, X } from 'lucide-react';
+import { Mic, MicOff, Send, X, Database } from 'lucide-react';
 import { useQuery } from '../context/QueryContext';
+import DBConnectModal from './DBConnectModal';
+import { useDB } from '../context/DBContext';
 
 const VoiceInput: React.FC = () => {
   const { currentText, setCurrentText, processQuery, clearCurrent, isLoading } = useQuery();
+  const { dbConfig } = useDB();
+
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isMicSupported, setIsMicSupported] = useState<boolean>(true);
+  const [showModal, setShowModal] = useState<boolean>(false);
+
   const recognitionRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Initialize speech recognition
+  // 🧠 Speech Recognition Setup
   useEffect(() => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = true;
       recognitionRef.current.interimResults = true;
-      
+
       recognitionRef.current.onresult = (event: any) => {
         const transcript = Array.from(event.results)
           .map((result: any) => result[0].transcript)
           .join('');
-        
         setCurrentText(transcript);
-        
-        // Auto-resize textarea
+
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
           textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
         }
       };
-      
-      recognitionRef.current.onerror = (event: any) => {
-        console.error('Speech recognition error', event.error);
-        setIsListening(false);
-      };
-      
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
+
+      recognitionRef.current.onerror = () => setIsListening(false);
+      recognitionRef.current.onend = () => setIsListening(false);
     } else {
       setIsMicSupported(false);
     }
-    
-    return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    };
+
+    return () => recognitionRef.current?.stop();
   }, [setCurrentText]);
 
   const toggleListening = () => {
@@ -62,23 +56,42 @@ const VoiceInput: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentText.trim()) {
-      processQuery(currentText);
+    if (!currentText.trim()) return;
+
+    if (!dbConfig) {
+      alert('Please connect to a database first.');
+      return;
     }
+
+    processQuery(currentText, dbConfig); // ✅ Pass it in
   };
 
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setCurrentText(e.target.value);
-    
-    // Auto-resize textarea
     e.target.style.height = 'auto';
     e.target.style.height = `${e.target.scrollHeight}px`;
   };
 
   return (
     <div className="card">
-      <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Ask in natural language</h2>
-      
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Ask in natural language</h2>
+        <button
+          onClick={() => setShowModal(true)}
+          className={`group flex items-center px-3 py-1 rounded font-medium border ${
+            dbConfig
+              ? 'bg-green-600 hover:bg-green-700 text-white'
+              : 'border-white text-white hover:bg-green-500 hover:border-green-500'
+          }`}
+          title={dbConfig ? 'Click to change database' : 'Connect to a database'}
+        >
+          <Database className="h-4 w-4 mr-1" />
+          {dbConfig ? 'Connected ✓' : 'Connect to DB'}
+        </button>
+      </div>
+
+      {showModal && <DBConnectModal onClose={() => setShowModal(false)} />}
+
       <form onSubmit={handleSubmit}>
         <div className="relative">
           <textarea
@@ -89,7 +102,7 @@ const VoiceInput: React.FC = () => {
             placeholder="e.g. 'Show me all teachers whose names start with B'"
             rows={2}
           />
-          
+
           {currentText && (
             <button
               type="button"
@@ -101,7 +114,7 @@ const VoiceInput: React.FC = () => {
             </button>
           )}
         </div>
-        
+
         <div className="flex justify-between mt-4">
           <div className="flex items-center">
             {isMicSupported ? (
@@ -128,18 +141,16 @@ const VoiceInput: React.FC = () => {
                 Microphone not supported in this browser
               </p>
             )}
-            
+
             {isListening && (
               <div className="wave-animation ml-2">
-                <div className="wave-bar"></div>
-                <div className="wave-bar"></div>
-                <div className="wave-bar"></div>
-                <div className="wave-bar"></div>
-                <div className="wave-bar"></div>
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="wave-bar" />
+                ))}
               </div>
             )}
           </div>
-          
+
           <button
             type="submit"
             className="btn btn-primary"

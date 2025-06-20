@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { useDB } from './DBContext';
 
 export interface QueryResult {
   fields: string[];
@@ -31,6 +32,7 @@ interface QueryContextType {
 const QueryContext = createContext<QueryContextType | undefined>(undefined);
 
 export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { dbConfig } = useDB(); // ✅ Correct usage at the top level
   const [currentText, setCurrentText] = useState<string>('');
   const [sqlQuery, setSqlQuery] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -38,8 +40,8 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [results, setResults] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<QueryItem[]>(() => {
-    const savedHistory = localStorage.getItem('queryHistory');
-    return savedHistory ? JSON.parse(savedHistory) : [];
+    const saved = localStorage.getItem('queryHistory');
+    return saved ? JSON.parse(saved) : [];
   });
 
   useEffect(() => {
@@ -48,26 +50,32 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const processQuery = async (text: string) => {
     if (!text.trim()) return;
-    
+
     setCurrentText(text);
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      // First, get the SQL query
+      if (!dbConfig) throw new Error('No database connected');
+
       setIsProcessing(true);
-      const { data: sqlData } = await api.post('/api/text-to-sql', { text });
+
+      // 🔹 Generate SQL query
+      const { data: sqlData } = await api.post('/api/text-to-sql', {
+        text,
+        schema: dbConfig.schema
+      });
       setSqlQuery(sqlData.query);
       setIsProcessing(false);
-      
-      // Then, execute the query
-      const { data: resultsData } = await api.post('/api/execute-query', { 
-        query: sqlData.query 
+
+      // 🔹 Execute the SQL query
+      const { data: resultsData } = await api.post('/api/execute-query', {
+        query: sqlData.query,
+        dbConfig
       });
-      
+
       setResults(resultsData);
-      
-      // Add to history
+
       const newItem: QueryItem = {
         id: Date.now().toString(),
         text,
@@ -75,11 +83,10 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         timestamp: Date.now(),
         results: resultsData
       };
-      
+
       setHistory(prev => [newItem, ...prev].slice(0, 10));
-      
     } catch (err: any) {
-      setError(err.response?.data?.message || 'An error occurred');
+      setError(err.response?.data?.message || err.message || 'An error occurred');
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -101,7 +108,7 @@ export const QueryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   return (
-    <QueryContext.Provider 
+    <QueryContext.Provider
       value={{
         currentText,
         setCurrentText,

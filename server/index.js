@@ -11,79 +11,58 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// Connexion MySQL
-const pool = mysql.createPool({
-  host: 'localhost',
-  user: 'root',
-  password: '', // ou 'root' selon ton installation
-  database: 'ensat', // adapte selon ton nom de BDD
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
+// Connect to DB
+app.post('/api/connect-db', async (req, res) => {
+  const { host, user, password, database } = req.body;
+
+  try {
+    const connection = await mysql.createConnection({ host, user, password, database });
+    const [tables] = await connection.query("SHOW TABLES");
+
+    const schema = {};
+    for (const row of tables) {
+      const tableName = Object.values(row)[0];
+      const [columns] = await connection.query(`SHOW COLUMNS FROM \`${tableName}\``);
+      schema[tableName] = columns.map(col => col.Field);
+    }
+
+    await connection.end();
+    return res.json({ message: 'Connected and schema retrieved', schema });
+  } catch (error) {
+    console.error('Connection failed:', error.message);
+    return res.status(500).json({ message: 'Connection failed', error: error.message });
+  }
 });
 
 // API Gemini → SQL
 app.post('/api/text-to-sql', async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, schema } = req.body;
 
-    if (!text) return res.status(400).json({ message: 'Text is required' });
+    if (!text || !schema) return res.status(400).json({ message: 'Text and schema are required' });
 
-    // Generate the prompt that describes the database contraints
-    const schemaDescription = `
-    Database schema:
-
-    Tables and their columns:
-    - clubs(id, name, godfather_id)
-    - sectors(id, abbreviation, name, sector_chief_id)
-    - staff(id, first_name, last_name, role)
-    - students(id, last_name, first_name, email, sexe, sector_id)
-    - student_club(student_id, club_id, role)
-    - subjects(id, name, description, subject_chief_id)
-    - teachers(id, last_name, first_name, email)
-    - teacher_subject(teached_id, subject_id)
-
-    Relationships between tables (foreign keys):
-    - students.sector_id → sectors.id
-    - sectors.sector_chief_id → staff.id
-    - clubs.godfather_id → staff.id
-    - subjects.subject_chief_id → teachers.id
-    - student_club.student_id → students.id
-    - student_club.club_id → clubs.id
-    - teacher_subject.teacher_id → teacher_id
-    - teacher_subject.subject_id → subject_id
-    `;
+    const schemaDescription = Object.entries(schema).map(([table, cols]) =>
+      `- ${table}(${cols.join(', ')})`
+    ).join('\n');
 
     const prompt = `
-    Using the following MySQL database schema and its relationships:
+Using the following MySQL schema:
 
-    ${schemaDescription}
+${schemaDescription}
 
-    Generate only a valid SQL query (no explanation, no formatting, no markdown) to answer the question: "${text}"
-    `;
+Generate only a valid SQL query (no explanation, no formatting, no markdown) to answer the question: "${text}"
+`;
 
     const response = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        contents: [{ parts: [{ text: prompt }] }]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { headers: { 'Content-Type': 'application/json' } }
     );
 
     const rawText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-
-    // Nettoyage du markdown et extraction de la vraie requête SQL
     const cleanedText = rawText?.replace(/```sql|```/gi, '').trim();
-
-    // Extraire uniquement la première vraie requête SQL
     const match = cleanedText.match(/(SELECT|INSERT|UPDATE|DELETE)[^;]+;/is);
     const sqlQuery = match ? match[0].trim() : cleanedText.split('\n').find(line => line.toUpperCase().startsWith('SELECT'));
-
-    console.log('Final SQL Query:', sqlQuery);
 
     if (!sqlQuery) return res.status(500).json({ message: 'No valid SQL query extracted.' });
 
@@ -94,28 +73,32 @@ app.post('/api/text-to-sql', async (req, res) => {
   }
 });
 
+
 // API exécution SQL
 app.post('/api/execute-query', async (req, res) => {
-  const { query } = req.body;
+  const { query, dbConfig } = req.body;
 
-  if (!query) return res.status(400).json({ message: 'Query is required' });
+  if (!query || !dbConfig) {
+    return res.status(400).json({ message: 'Query and DB config are required' });
+  }
 
   if (!query.toUpperCase().includes('FROM')) {
     return res.status(400).json({ message: 'Query seems incomplete (missing FROM clause).' });
   }
-  
+
   if (!isQuerySafe(query)) {
     return res.status(403).json({ message: 'Forbidden operation detected in query.' });
   }
 
+  const { host, user, password, database } = dbConfig;
+
   try {
     console.log('Received query for execution:', query);
-    const [rows, fields] = await pool.query(query);
+    const connection = await mysql.createConnection({ host, user, password, database });
+    const [rows, fields] = await connection.query(query);
     const columns = fields.map(f => f.name);
-    return res.json({
-      fields: columns,
-      rows
-    });
+    await connection.end();
+    return res.json({ fields: columns, rows });
   } catch (error) {
     console.error('Query execution error:', error.message);
     return res.status(500).json({ message: 'SQL Execution failed', error: error.message });
