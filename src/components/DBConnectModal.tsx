@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDB } from '../context/DBContext';
+import { api } from '../services/api';
 
 interface Props {
   onClose: () => void;
@@ -28,32 +29,33 @@ const DBConnectModal: React.FC<Props> = ({ onClose }) => {
 
   const handleTest = async () => {
     try {
-      const res = await fetch('/api/connect-db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, user, password, database })
+      const res = await api.post('/api/connect-db', {
+        host,
+        user,
+        password,
+        database
       });
-      const data = await res.json();
-      alert(res.ok ? '✅ Connection successful!' : `❌ ${data.message}`);
-    } catch {
-      alert('❌ Failed to connect.');
+      alert('✅ Connection successful!');
+    } catch (err: any) {
+      alert(`❌ Failed to connect. ${err?.response?.data?.message || ''}`);
     }
   };
 
   const handleConnect = async () => {
-    const res = await fetch('/api/connect-db', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, user, password, database })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      const config = { host, user, database, schema: data.schema };
+    try {
+      const res = await api.post('/api/connect-db', {
+        host,
+        user,
+        password,
+        database
+      });
+
+      const config = { host, user, database, schema: res.data.schema };
       localStorage.setItem('dbConfig', JSON.stringify(config));
       setDbConfig({ ...config, password });
       onClose();
-    } else {
-      alert(data.message);
+    } catch (err: any) {
+      alert(err?.response?.data?.message || '❌ Failed to connect.');
     }
   };
 
